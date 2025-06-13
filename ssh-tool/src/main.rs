@@ -4,7 +4,7 @@ use std::process::Command;
 use anyhow::{Result, anyhow};
 
 #[derive(Parser)]
-#[clap(name = "ssh-tool", about = "A CLI tool to SSH into different environments")]
+#[clap(name = "ssh-tool", about = "A CLI tool to SSH into Kubernetes services")]
 struct Cli {
     #[clap(subcommand)]
     command: Commands,
@@ -12,10 +12,12 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Connect to an environment via SSH
+    /// Connect to a specific service pod via SSH (QA/RFS) or custom method (Prod)
     Connect {
         #[clap(value_enum)]
         env: Environment,
+        service_type: String,
+        version: String,
     },
 }
 
@@ -36,24 +38,38 @@ impl Environment {
     }
 }
 
-fn execute_ssh(env: Environment) -> Result<()> {
-    let (host, port, env_name) = env.get_ssh_details();
+fn execute_ssh(env: Environment, service_type: String, version: String) -> Result<()> {
+    let service_name = format!("{}-{}", service_type, version);
+    let (jump_host, jump_port, env_name) = env.get_ssh_details();
     let password = prompt_password(format!("Enter SSH password for {}: ", env_name))?;
 
-    // Use sshpass to pass the password to the SSH command
+    let ssh_command = match env {
+        Environment::QA | Environment::RFS => {
+            format!("ssh-pods {}", service_name)
+        }
+        Environment::Prod => {
+            // Placeholder for Prod-specific logic
+            return Err(anyhow!(
+                "Prod environment is not yet implemented. Please add custom connection logic here."
+            ));
+        }
+    };
+
     let status = Command::new("sshpass")
         .arg("-p")
         .arg(&password)
         .arg("ssh")
+        .arg("-t") // Force TTY allocation for interactive sessions
         .arg("-o")
-        .arg("StrictHostKeyChecking=no") // Avoid host key verification prompt
+        .arg("StrictHostKeyChecking=no")
         .arg("-p")
-        .arg(port)
-        .arg(host)
+        .arg(jump_port)
+        .arg(jump_host)
+        .arg(&ssh_command)
         .status()?;
 
     if !status.success() {
-        return Err(anyhow!("SSH connection to {} failed", env_name));
+        return Err(anyhow!("Connection to {} or service {} failed", env_name, service_name));
     }
 
     Ok(())
@@ -63,9 +79,9 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Connect { env } => {
-            execute_ssh(env)?;
-            println!("SSH session ended.");
+        Commands::Connect { env, service_type, version } => {
+            execute_ssh(env, service_type, version)?;
+            println!("Session ended.");
         }
     }
 
